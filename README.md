@@ -2,11 +2,12 @@
 
 This repository contains a minimal starter for a **finance logger** and **Pomodoro tracker** designed to be used as an extension for chat agents such as Hermes or OpenClaw.
 
-The architecture separates concerns into three parts:
+The architecture separates concerns into four parts:
 
-1. **Backend API (Golang)** – Provides REST endpoints for recording transactions and retrieving summaries.
-2. **Database (Supabase/PostgreSQL)** – Stores persistent data such as transactions and Pomodoro sessions.
-3. **Frontend Dashboard (Next.js)** – Visualises your financial data and focus statistics.
+1. **Backend API (Golang)** – Provides REST endpoints for finance and Pomodoro actions.
+2. **MCP Server (Golang)** – Exposes backend actions as MCP tools over stdio.
+3. **Database (Supabase/PostgreSQL)** – Stores transactions and Pomodoro sessions.
+4. **Frontend Dashboard (Next.js)** – Visualises your financial data and focus statistics.
 
 The goal of this project is to give you a clean foundation without bundling any dependencies. You can run `go mod download` and `npm install` locally to fetch libraries when you are ready.
 
@@ -14,15 +15,22 @@ The goal of this project is to give you a clean foundation without bundling any 
 
 ```text
 sregep/
-├── backend/         # Golang REST API
-│   ├── main.go      # HTTP handlers and Supabase integration
-│   ├── go.mod       # Go module definitions
-│   └── .env.example # Backend environment template
-├── frontend/        # Next.js dashboard starter
-│   ├── package.json # Frontend dependencies only, no node_modules
+├── backend/            # Golang REST API
+│   ├── main.go
+│   ├── go.mod
+│   └── .env.example
+├── mcp-server/         # Golang MCP stdio server for Hermes/OpenClaw
+│   ├── main.go
+│   ├── go.mod
+│   └── .env.example
+├── frontend/           # Next.js dashboard starter
+│   ├── package.json
 │   ├── src/
-│   └── .env.example # Frontend environment template
-├── docs/            # Additional documentation
+│   └── .env.example
+├── docs/
+│   ├── api.md
+│   ├── mcp-hermes.md
+│   └── schema.sql
 ├── .gitignore
 └── README.md
 ```
@@ -31,47 +39,18 @@ sregep/
 
 | Requirement | Version | Purpose |
 |---|---:|---|
-| Go | 1.21+ | Backend API |
+| Go | 1.21+ | Backend and MCP server |
 | Node.js | 18+ | Frontend app |
 | Supabase | - | PostgreSQL database |
 | Git | - | Version control |
 
 ## Database schema
 
-Run this SQL in Supabase.
-
-```sql
-create table public.transactions (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  type text not null check (type in ('income','expense')),
-  amount numeric not null check (amount > 0),
-  currency text not null default 'IDR',
-  category text not null,
-  note text,
-  source text not null default 'api',
-  occurred_at timestamptz not null default now(),
-  created_at timestamptz not null default now()
-);
-
-create table public.pomodoro_sessions (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  task_name text,
-  status text not null check (status in ('running','paused','completed','cancelled')),
-  duration_minutes integer not null default 25,
-  started_at timestamptz not null default now(),
-  ended_at timestamptz,
-  created_at timestamptz not null default now()
-);
-
-alter table public.transactions enable row level security;
-alter table public.pomodoro_sessions enable row level security;
-```
+Run the SQL in `docs/schema.sql` inside Supabase.
 
 ## Backend API
 
-The backend uses Gin for routing and a Supabase client to interact with Supabase.
+The backend uses Gin for routing and Supabase REST API for persistence.
 
 ### Run backend
 
@@ -89,9 +68,48 @@ The backend listens on `:8080` by default.
 
 | Method | Endpoint | Description |
 |---|---|---|
+| GET | `/health` | Health check |
 | POST | `/api/transactions` | Create transaction |
 | GET | `/api/transactions?user_id=<uuid>` | List transactions |
 | GET | `/api/summary?user_id=<uuid>` | Get finance summary |
+| POST | `/api/pomodoro/start` | Start Pomodoro session |
+| POST | `/api/pomodoro/stop` | Stop Pomodoro session |
+| GET | `/api/pomodoro/current?user_id=<uuid>` | Get running session |
+
+## MCP server for Hermes
+
+The MCP server lives in `mcp-server/` and talks to the backend API.
+
+### Run MCP server
+
+```bash
+cd mcp-server
+cp .env.example .env
+export SREGEP_API_BASE_URL=http://localhost:8080
+export SREGEP_DEFAULT_USER_ID=your-user-uuid
+
+go run main.go
+```
+
+### Build MCP binary
+
+```bash
+cd mcp-server
+go build -o sregep-mcp .
+```
+
+### MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `finance_add_transaction` | Record income or expense |
+| `finance_list_transactions` | List transactions |
+| `finance_summary` | Get finance summary |
+| `pomodoro_start` | Start focus session |
+| `pomodoro_stop` | Stop session by ID |
+| `pomodoro_current` | Get running session |
+
+Detailed setup is in `docs/mcp-hermes.md`.
 
 ## Frontend
 
@@ -104,30 +122,20 @@ npm install
 npm run dev
 ```
 
-## Hermes/OpenClaw integration idea
-
-The first version can expose the Go API through a REST bridge. Later, you can wrap the same finance and Pomodoro operations as MCP tools.
-
-Example AI command:
+## Example AI commands
 
 ```text
-Catat pengeluaran 25 ribu buat kopi.
+Catat pengeluaran 25 ribu buat kopi kategori food.
 ```
 
-Expected tool/action payload:
+```text
+Mulai pomodoro 25 menit buat ngerjain Go API.
+```
 
-```json
-{
-  "user_id": "<uuid>",
-  "type": "expense",
-  "amount": 25000,
-  "currency": "IDR",
-  "category": "food",
-  "note": "kopi",
-  "source": "ai"
-}
+```text
+Cek summary finance bulan ini.
 ```
 
 ## Notes
 
-This is a starter project. Before production use, add authentication, authorization, request validation, RLS policies, rate limiting, and better error handling.
+This is a starter project. Before production use, add authentication, authorization, request validation, Supabase RLS policies, rate limiting, and better error handling.
