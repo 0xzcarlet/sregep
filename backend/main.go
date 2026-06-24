@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -24,6 +26,22 @@ type Transaction struct {
 	Source     string     `json:"source"`
 	OccurredAt *time.Time `json:"occurred_at,omitempty"`
 	CreatedAt  string     `json:"created_at,omitempty"`
+}
+
+type PomodoroSession struct {
+	ID              string     `json:"id,omitempty"`
+	UserID          string     `json:"user_id" binding:"required"`
+	TaskName        string     `json:"task_name"`
+	Status          string     `json:"status"`
+	DurationMinutes int        `json:"duration_minutes"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
+	CreatedAt       string     `json:"created_at,omitempty"`
+}
+
+type StopPomodoroRequest struct {
+	UserID    string `json:"user_id" binding:"required"`
+	SessionID string `json:"session_id" binding:"required"`
 }
 
 type Summary struct {
@@ -58,6 +76,10 @@ func main() {
 	r.POST("/api/transactions", app.createTransaction)
 	r.GET("/api/transactions", app.listTransactions)
 	r.GET("/api/summary", app.getSummary)
+
+	r.POST("/api/pomodoro/start", app.startPomodoro)
+	r.POST("/api/pomodoro/stop", app.stopPomodoro)
+	r.GET("/api/pomodoro/current", app.currentPomodoro)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -117,7 +139,7 @@ func (app App) listTransactions(c *gin.Context) {
 		return
 	}
 
-	path := fmt.Sprintf("/rest/v1/transactions?user_id=eq.%s&select=*&order=occurred_at.desc", userID)
+	path := fmt.Sprintf("/rest/v1/transactions?user_id=eq.%s&select=*&order=occurred_at.desc", url.QueryEscape(userID))
 	body, status, err := app.supabaseRequest(http.MethodGet, path, nil, nil)
 	if err != nil {
 		c.JSON(status, gin.H{"success": false, "error": err.Error()})
@@ -134,7 +156,7 @@ func (app App) getSummary(c *gin.Context) {
 		return
 	}
 
-	path := fmt.Sprintf("/rest/v1/transactions?user_id=eq.%s&select=type,amount", userID)
+	path := fmt.Sprintf("/rest/v1/transactions?user_id=eq.%s&select=type,amount", url.QueryEscape(userID))
 	body, status, err := app.supabaseRequest(http.MethodGet, path, nil, nil)
 	if err != nil {
 		c.JSON(status, gin.H{"success": false, "error": err.Error()})
@@ -162,6 +184,91 @@ func (app App) getSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": summary})
 }
 
+func (app App) startPomodoro(c *gin.Context) {
+	var session PomodoroSession
+	if err := c.ShouldBindJSON(&session); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if session.DurationMinutes <= 0 {
+		session.DurationMinutes = 25
+	}
+
+	if session.Status == "" {
+		session.Status = "running"
+	}
+
+	if session.StartedAt == nil {
+		now := time.Now()
+		session.StartedAt = &now
+	}
+
+	payload, err := json.Marshal(session)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	body, status, err := app.supabaseRequest(http.MethodPost, "/rest/v1/pomodoro_sessions", bytes.NewReader(payload), map[string]string{
+		"Content-Type": "application/json",
+		"Prefer":       "return=representation",
+	})
+	if err != nil {
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.Data(http.StatusCreated, "application/json", body)
+}
+
+func (app App) stopPomodoro(c *gin.Context) {
+	var req StopPomodoroRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	now := time.Now()
+	payload, err := json.Marshal(map[string]any{
+		"status":   "completed",
+		"ended_at": now,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	path := fmt.Sprintf("/rest/v1/pomodoro_sessions?id=eq.%s&user_id=eq.%s", url.QueryEscape(req.SessionID), url.QueryEscape(req.UserID))
+	body, status, err := app.supabaseRequest(http.MethodPatch, path, bytes.NewReader(payload), map[string]string{
+		"Content-Type": "application/json",
+		"Prefer":       "return=representation",
+	})
+	if err != nil {
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", body)
+}
+
+func (app App) currentPomodoro(c *gin.Context) {
+	userID := c.Query("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "user_id is required"})
+		return
+	}
+
+	path := fmt.Sprintf("/rest/v1/pomodoro_sessions?user_id=eq.%s&status=eq.running&select=*&order=started_at.desc&limit=1", url.QueryEscape(userID))
+	body, status, err := app.supabaseRequest(http.MethodGet, path, nil, nil)
+	if err != nil {
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", body)
+}
+
 func (app App) supabaseRequest(method string, path string, body io.Reader, headers map[string]string) ([]byte, int, error) {
 	req, err := http.NewRequest(method, app.SupabaseURL+path, body)
 	if err != nil {
@@ -187,7 +294,7 @@ func (app App) supabaseRequest(method string, path string, body io.Reader, heade
 	}
 
 	if res.StatusCode >= 400 {
-		return resBody, res.StatusCode, fmt.Errorf(string(resBody))
+		return resBody, res.StatusCode, errors.New(string(resBody))
 	}
 
 	return resBody, res.StatusCode, nil
