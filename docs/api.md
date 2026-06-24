@@ -78,10 +78,52 @@ Response:
 }
 ```
 
+## Start Pomodoro
+
+```http
+POST /api/pomodoro/start
+```
+
+Request body:
+
+```json
+{
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "task_name": "Build MCP server",
+  "duration_minutes": 25
+}
+```
+
+The backend sets `status` to `running` by default.
+
+## Stop Pomodoro
+
+```http
+POST /api/pomodoro/stop
+```
+
+Request body:
+
+```json
+{
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "session_id": "00000000-0000-0000-0000-000000000000"
+}
+```
+
+The backend updates the matching session to `completed` and fills `ended_at`.
+
+## Current Pomodoro
+
+```http
+GET /api/pomodoro/current?user_id=<uuid>
+```
+
+Returns the latest running Pomodoro session for the user.
+
 ## Next endpoints to add
 
 - `PATCH /api/transactions/:id`
 - `DELETE /api/transactions/:id`
-- `POST /api/pomodoro/start`
-- `POST /api/pomodoro/stop`
 - `GET /api/pomodoro/stats`
+- `POST /api/pomodoro/cancel`
