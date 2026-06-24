@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -33,15 +34,13 @@ func NewHandler(finance FinanceService, pomodoro PomodoroService, logger *slog.L
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = jsonEncoder(w).Encode(payload)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func jsonEncoder(w http.ResponseWriter) interface{ Encode(any) error } {
-	return jsonResponseWriter{w: w}
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]any{"success": false, "error": message})
 }
 
-type jsonResponseWriter struct{ w http.ResponseWriter }
-
-func (j jsonResponseWriter) Encode(v any) error {
-	return json.NewEncoder(j.w).Encode(v)
+func methodNotAllowed(w http.ResponseWriter) {
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
